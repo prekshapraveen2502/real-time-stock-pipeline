@@ -1,0 +1,4 @@
+# Phase 0-2 dependencies. Versions pinned for reproducibility.
+python-dotenv==1.0.1   # loads .env into the process environment
+requests==2.32.3       # HTTP client for the stock API
+kafka-python==2.0.2    # Kafka producer/consumer client (Phase 2-3)

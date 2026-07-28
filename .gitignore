@@ -1,0 +1,27 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environment (regenerable from requirements.txt — never commit)
+venv/
+.venv/
+
+# --- Secrets / local config ---
+# Ignore the REAL environment file (contains secrets)...
+.env
+# ...but keep the committed template so teammates know which vars to set.
+!.env.example
+
+# --- Data / artifacts (local pipeline output) ---
+*.parquet
+*.csv
+data/
+output/
+
+# --- OS / IDE / tooling ---
+.DS_Store
+.vscode/
+.idea/
+.claude/
