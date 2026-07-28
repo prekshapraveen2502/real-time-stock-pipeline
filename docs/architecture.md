@@ -30,6 +30,29 @@ All services run locally with Docker Compose, and PostgreSQL backs the Airflow m
 * Airflow: orchestrates the batch jobs.
 * Snowflake: the analytics warehouse.
 
+## Data contract: stock event
+
+Each Kafka message represents one observation of one ticker at one point in time. All
+timestamps are UTC (ISO-8601). Prices are decimal.
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| symbol | string | ticker, e.g. AAPL |
+| timestamp | string | when the observation is for (event time) |
+| open | decimal | opening price of the bar |
+| high | decimal | highest price of the bar |
+| low | decimal | lowest price of the bar |
+| close | decimal | closing price of the bar |
+| volume | integer | shares traded in the bar |
+| source | string | data provenance, e.g. yfinance |
+| interval | string | bar resolution, e.g. 1m |
+| currency | string | price units, e.g. USD |
+| ingested_at | string | when the producer fetched it (processing time) |
+
+The natural key is (symbol, timestamp): it uniquely identifies one observation and is used
+downstream for deduplication and idempotency. The producer polls each ticker on a
+configurable interval (default 60 seconds).
+
 ## Storage
 
 MinIO exposes an S3 compatible API on port 9000 and a web console on port 9001. Objects are
