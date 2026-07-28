@@ -53,6 +53,20 @@ The natural key is (symbol, timestamp): it uniquely identifies one observation a
 downstream for deduplication and idempotency. The producer polls each ticker on a
 configurable interval (default 60 seconds).
 
+## Kafka topic design
+
+| Setting | Value | Reason |
+| ------- | ----- | ------ |
+| topic | stock-prices | single topic for all tickers |
+| partitions | 5 | allows up to 5 parallel consumers; enough for a handful of tickers |
+| message key | symbol | routes all events for a ticker to one partition, preserving per-ticker order |
+| replication factor | 1 | single broker locally; would be 3 in production for fault tolerance |
+| retention | 7 days (default) | keeps messages after consumption to allow replay |
+
+Kafka guarantees ordering only within a partition. Keying by symbol keeps each ticker's
+events ordered, which is what matters for time-series prices. Ordering across different
+tickers is not required.
+
 ## Storage
 
 MinIO exposes an S3 compatible API on port 9000 and a web console on port 9001. Objects are
