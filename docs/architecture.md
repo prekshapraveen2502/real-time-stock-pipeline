@@ -67,6 +67,16 @@ Kafka guarantees ordering only within a partition. Keying by symbol keeps each t
 events ordered, which is what matters for time-series prices. Ordering across different
 tickers is not required.
 
+## Failure scenarios and defenses
+
+| Failure | What happens | Defense |
+| ------- | ------------ | ------- |
+| Stock API down or slow | A fetch hangs or errors | Request timeout, bounded retries with exponential backoff, then skip the cycle, log and emit a metric. Never crash, never block forever. The next cycle retries; gaps can be backfilled. |
+| Producer to Kafka write not durable | Message acknowledged but not safely stored | acks=all, producer retries, and idempotent producer so retries do not create duplicates. |
+| Spark crashes before checkpoint | On restart it reprocesses the same offset and writes the record to bronze twice | At-least-once processing plus deduplication on the natural key (symbol, timestamp) in the silver layer. |
+| Duplicates in general | Same observation appears more than once | Deduplicate on the natural key (symbol, timestamp). |
+| Kafka unavailable | Producer cannot send | Producer buffers and retries; alert if the buffer fills. Messages already in Kafka are retained for 7 days for replay. |
+
 ## Storage
 
 MinIO exposes an S3 compatible API on port 9000 and a web console on port 9001. Objects are
