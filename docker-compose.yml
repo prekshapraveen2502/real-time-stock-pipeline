@@ -1,0 +1,22 @@
+# Local development stack. Grown one service per phase.
+# Bring up:   docker compose up -d
+# Tear down:  docker compose down        (add -v to also wipe volumes/data)
+
+services:
+  # Object storage (S3-compatible). Holds Bronze/Silver/Gold layers later.
+  minio:
+    image: minio/minio:latest
+    container_name: stock-minio
+    ports:
+      - "9000:9000"   # S3 API endpoint (used by Spark/producers)
+      - "9001:9001"   # web console (open in your browser)
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}          # injected from .env
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}  # injected from .env
+    volumes:
+      - minio_data:/data   # named volume → data survives container restarts
+    command: server /data --console-address ":9001"
+
+# Named volumes are managed by Docker and persist across `up`/`down`.
+volumes:
+  minio_data:
