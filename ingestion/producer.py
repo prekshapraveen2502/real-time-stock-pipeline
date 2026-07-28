@@ -1,12 +1,13 @@
 """Stock data producer.
 
-Fetches the latest 1-minute bar for each configured ticker. Config comes from
-the environment (12-factor), not hardcoded. No loop, resilience, or Kafka yet --
-those come next.
+Fetches the latest 1-minute bar for each configured ticker, then repeats on a
+fixed interval. Config comes from the environment (12-factor), not hardcoded.
+No resilience or Kafka yet -- those come next.
 """
 
 import json
 import os
+import time
 from datetime import datetime, timezone
 
 import yfinance as yf
@@ -14,8 +15,9 @@ from dotenv import load_dotenv
 
 load_dotenv()  # read the .env file into environment variables
 
-# Read the ticker list from config; split on commas and strip stray spaces.
+# Read config from the environment; split symbols on commas and strip spaces.
 SYMBOLS = [s.strip() for s in os.getenv("STOCK_SYMBOLS", "AAPL").split(",") if s.strip()]
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
 
 
 def _utc(ts):
@@ -41,6 +43,12 @@ def fetch_latest_bar(symbol):
     }
 
 
+def run():
+    while True:  # outer loop: poll forever
+        for symbol in SYMBOLS:  # inner loop: every configured ticker
+            print(json.dumps(fetch_latest_bar(symbol)))
+        time.sleep(POLL_INTERVAL)
+
+
 if __name__ == "__main__":
-    for symbol in SYMBOLS:
-        print(json.dumps(fetch_latest_bar(symbol)))
+    run()
