@@ -3,20 +3,58 @@
 # Tear down:  docker compose down        (add -v to also wipe volumes/data)
 
 services:
-  # Object storage (S3-compatible). Holds Bronze/Silver/Gold layers later.
+  # Object storage (S3 compatible). Holds bronze/silver/gold layers later.
   minio:
     image: minio/minio:latest
     container_name: stock-minio
     ports:
-      - "9000:9000"   # S3 API endpoint (used by Spark/producers)
-      - "9001:9001"   # web console (open in your browser)
+      - "9000:9000"   # S3 API endpoint
+      - "9001:9001"   # web console
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}          # injected from .env
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}  # injected from .env
     volumes:
-      - minio_data:/data   # named volume → data survives container restarts
+      - minio_data:/data   # named volume so data survives restarts
     command: server /data --console-address ":9001"
 
-# Named volumes are managed by Docker and persist across `up`/`down`.
+  # Coordinates the Kafka broker (leader election, metadata).
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: stock-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  # The Kafka broker: the durable, ordered event log.
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: stock-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"   # host access (our producer runs on the Mac, not in a container)
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Two listeners: one for other containers (kafka:29092), one for the host (localhost:9092).
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  # Web UI to see topics, partitions, and messages.
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: stock-kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"   # open http://localhost:8080
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+
+# Named volumes are managed by Docker and persist across up/down.
 volumes:
   minio_data:

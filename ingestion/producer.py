@@ -1,9 +1,8 @@
 """Stock data producer.
 
-Fetches the latest 1-minute bar for each configured ticker, then repeats on a
-fixed interval. Network calls are wrapped in bounded retries with exponential
-backoff and jitter, so a single flaky fetch cannot crash the producer. Config
-comes from the environment (12-factor). No Kafka yet -- that is the next step.
+Fetches the latest 1-minute bar for each configured ticker and publishes it to
+Kafka, keyed by symbol, on a fixed interval. Network fetches use bounded retries
+with exponential backoff and jitter. Config comes from the environment.
 """
 
 import json
@@ -15,6 +14,7 @@ from datetime import datetime, timezone
 
 import yfinance as yf
 from dotenv import load_dotenv
+from kafka import KafkaProducer
 
 load_dotenv()  # read the .env file into environment variables
 
@@ -23,6 +23,8 @@ SYMBOLS = [s.strip() for s in os.getenv("STOCK_SYMBOLS", "AAPL").split(",") if s
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "10"))
+KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "stock-prices")
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -77,14 +79,38 @@ def fetch_with_retry(symbol):
     return None
 
 
+def build_producer():
+    """Create a Kafka producer. acks=all + retries give durability on the write."""
+    return KafkaProducer(
+        bootstrap_servers=KAFKA_BOOTSTRAP,
+        key_serializer=lambda k: k.encode("utf-8"),
+        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+        acks="all",
+        retries=5,
+    )
+
+
 def run():
-    logger.info("producer starting: %d symbols, every %ds", len(SYMBOLS), POLL_INTERVAL)
-    while True:
-        for symbol in SYMBOLS:
-            record = fetch_with_retry(symbol)
-            if record is not None:
-                print(json.dumps(record))
-        time.sleep(POLL_INTERVAL)
+    producer = build_producer()
+    logger.info(
+        "producer starting: %d symbols -> topic '%s' every %ds",
+        len(SYMBOLS), KAFKA_TOPIC, POLL_INTERVAL,
+    )
+    try:
+        while True:
+            sent = 0
+            for symbol in SYMBOLS:
+                record = fetch_with_retry(symbol)
+                if record is not None:
+                    # key = symbol so all of one ticker's events share a partition (ordering)
+                    producer.send(KAFKA_TOPIC, key=symbol, value=record)
+                    sent += 1
+            producer.flush()  # wait for this batch to be acknowledged
+            logger.info("sent %d records to '%s'", sent, KAFKA_TOPIC)
+            time.sleep(POLL_INTERVAL)
+    finally:
+        producer.flush()
+        producer.close()
 
 
 if __name__ == "__main__":
