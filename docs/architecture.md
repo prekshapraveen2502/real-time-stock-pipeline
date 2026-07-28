@@ -77,6 +77,31 @@ tickers is not required.
 | Duplicates in general | Same observation appears more than once | Deduplicate on the natural key (symbol, timestamp). |
 | Kafka unavailable | Producer cannot send | Producer buffers and retries; alert if the buffer fills. Messages already in Kafka are retained for 7 days for replay. |
 
+## Event flow
+
+```mermaid
+sequenceDiagram
+    participant P as Producer
+    participant K as Kafka (stock-prices)
+    participant S as Spark Streaming
+    participant M as MinIO (bronze)
+    P->>K: send event, key = symbol (acks=all)
+    K-->>P: ack, offset assigned
+    S->>K: poll assigned partition
+    K-->>S: records at offsets
+    S->>M: write Parquet to bronze
+    S->>S: commit checkpoint (processed offsets)
+```
+
+## Scalability
+
+Partitions are the unit of parallelism: the number of consumers in a group cannot exceed
+the number of partitions. Partition count is therefore a capacity decision made upfront,
+since adding partitions later changes the key to partition mapping. The producer scales
+horizontally by splitting the ticker list across multiple instances. Kafka scales by adding
+brokers and raising the replication factor. At high message rates the bronze layer must
+avoid the small files problem through batching and compaction.
+
 ## Storage
 
 MinIO exposes an S3 compatible API on port 9000 and a web console on port 9001. Objects are
