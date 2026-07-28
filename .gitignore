@@ -20,6 +20,9 @@ venv/
 data/
 output/
 
+# --- Local-only notes (keep private, off GitHub) ---
+docs/reflections/
+
 # --- OS / IDE / tooling ---
 .DS_Store
 .vscode/

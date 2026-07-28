@@ -1,53 +1,39 @@
 # Architecture
 
-This document grows as the project is built, one phase at a time.
+## Overview
 
-## Target end-to-end pipeline
+The pipeline ingests live stock market data, processes it through a layered
+(bronze / silver / gold) data lake, and loads analytics ready tables into Snowflake.
 
 ```
 Stock API (Yahoo Finance / Alpha Vantage)
-        │  Python Producer (polling, retries, backoff, keyed messages, idempotency)
-        ▼
-   Kafka Topic  ◄── Zookeeper
-        │  Spark Structured Streaming (checkpointing, watermarks)
-        ▼
-   Bronze Layer (MinIO, raw immutable Parquet)
-        │  clean / dedupe / data-quality checks / schema enforcement
-        ▼
-   Silver Layer (MinIO, validated)
-        │  dimensional modeling
-        ▼
-   Gold Layer (star schema: fact_prices + dim_ticker/dim_date, SCD2, surrogate keys)
-        │  COPY INTO / stages
-        ▼
-   Snowflake  →  Analytics SQL  →  Dashboard (optional)
-
-Airflow orchestrates the batch path (retries, backfills, sensors, dependencies).
-Everything runs via docker-compose; Postgres backs Airflow metadata.
+  -> Python producer
+  -> Kafka (with Zookeeper)
+  -> Spark Structured Streaming
+  -> Bronze layer (MinIO, raw Parquet)
+  -> Silver layer (cleaned, validated)
+  -> Gold layer (star schema)
+  -> Snowflake
+  -> Analytics SQL
 ```
 
-## Component responsibilities
+Airflow orchestrates the batch jobs, including retries, backfills, and task dependencies.
+All services run locally with Docker Compose, and PostgreSQL backs the Airflow metadata.
 
-| Component | Responsibility | Phase |
-|-----------|----------------|------:|
-| Python Producer | Poll the stock API, publish keyed JSON events to Kafka | 2 |
-| Kafka + Zookeeper | Durable, ordered, replayable event log | 3 |
-| Spark Structured Streaming | Consume Kafka, write raw events to Bronze | 4 |
-| MinIO | S3-compatible object storage for Bronze/Silver/Gold | 5 |
-| Spark (batch) | Bronze→Silver cleaning, Silver→Gold modeling | 5–7 |
-| Snowflake | Analytics warehouse (star schema) | 9 |
-| Airflow | Orchestrate batch jobs, retries, backfills | 8 |
+## Components
 
-## Current state — after Phase 0
+* Python producer: polls the stock API and publishes events to a Kafka topic.
+* Kafka and Zookeeper: a durable, ordered, replayable event log.
+* Spark Structured Streaming: consumes Kafka and writes raw events to the bronze layer.
+* MinIO: S3 compatible object storage for the data lake.
+* Spark batch jobs: clean bronze into silver and model silver into a gold star schema.
+* Airflow: orchestrates the batch jobs.
+* Snowflake: the analytics warehouse.
 
-Only local infrastructure exists so far:
+## Storage
 
-```
-Docker Compose
-   └── MinIO (object storage)
-         :9000  S3 API
-         :9001  web console
-         volume: minio_data  (persists across restarts)
-```
+MinIO exposes an S3 compatible API on port 9000 and a web console on port 9001. Objects are
+stored in a Docker named volume so data persists across container restarts.
 
-Config is injected from a gitignored `.env` file (12-Factor); secrets never live in code.
+Configuration is injected through environment variables. Secrets are never committed to
+source control.
