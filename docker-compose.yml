@@ -24,6 +24,9 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
 
   # The Kafka broker: the durable, ordered event log.
   kafka:
@@ -42,6 +45,8 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
 
   # Web UI to see topics, partitions, and messages.
   kafka-ui:
@@ -58,3 +63,6 @@ services:
 # Named volumes are managed by Docker and persist across up/down.
 volumes:
   minio_data:
+  kafka_data:
+  zookeeper_data:
+  zookeeper_log:

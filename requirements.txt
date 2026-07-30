@@ -2,3 +2,4 @@
 python-dotenv==1.0.1   # loads .env into the process environment
 requests==2.32.3       # HTTP client for the stock API
 kafka-python-ng==2.2.3 # Kafka producer/consumer client (maintained fork, Python 3.12+)
+pyspark==4.2.0         # Spark Structured Streaming (bronze) + batch jobs (silver/gold)
