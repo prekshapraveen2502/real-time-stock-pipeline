@@ -1,7 +1,8 @@
-"""Spark Structured Streaming: read stock events from Kafka and print them.
+"""Spark Structured Streaming: read stock events from Kafka and save them to Bronze.
 
-Step A: prove Spark can consume the topic and parse our JSON data contract.
-Step B (next) will switch the sink to the MinIO bronze layer as Parquet.
+Reads the raw messages from the Kafka topic, parses our JSON data contract, and
+writes them unchanged into the MinIO bronze bucket as Parquet files, partitioned
+by date. This is the bronze layer: the raw, untouched copy of the data.
 """
 
 import os
@@ -9,20 +10,21 @@ import os
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json
 from pyspark.sql.types import DoubleType, LongType, StringType, StructField, StructType
+from dotenv import load_dotenv
+
+load_dotenv()  # read .env so config matches the rest of the project
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "stock-prices")
 
+# MinIO (S3-compatible storage) connection details.
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
+MINIO_USER = os.getenv("MINIO_ROOT_USER", "minioadmin")
+MINIO_PASSWORD = os.getenv("MINIO_ROOT_PASSWORD", "minioadmin123")
 
-# =====================================================================
-# TODO 1 (YOUR CODE): define the schema of one stock event.
-# It must match our data contract. Fill in every field with the right type:
-#   - text fields  -> StringType()      (symbol, timestamp, source, interval,
-#                                         currency, ingested_at)
-#   - price fields -> DoubleType()      (open, high, low, close)
-#   - volume       -> LongType()
-# Example of the pattern:  StructField("symbol", StringType()),
-# =====================================================================
+BRONZE_PATH = "s3a://bronze/stock-prices"
+CHECKPOINT_PATH = "spark-checkpoints/bronze"  # local: remembers which offsets are done
+
 STOCK_SCHEMA = StructType([
     StructField("symbol", StringType()),
     StructField("timestamp", StringType()),
@@ -39,14 +41,24 @@ STOCK_SCHEMA = StructType([
 
 
 def build_spark():
-    return SparkSession.builder.appName("stock-bronze-stream").getOrCreate()
+    # These fs.s3a.* settings tell Spark how to reach MinIO instead of real AWS S3.
+    return (
+        SparkSession.builder
+        .appName("stock-bronze-stream")
+        .config("spark.hadoop.fs.s3a.endpoint", MINIO_ENDPOINT)
+        .config("spark.hadoop.fs.s3a.access.key", MINIO_USER)
+        .config("spark.hadoop.fs.s3a.secret.key", MINIO_PASSWORD)
+        .config("spark.hadoop.fs.s3a.path.style.access", "true")
+        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
+        .getOrCreate()
+    )
 
 
 def main():
     spark = build_spark()
     spark.sparkContext.setLogLevel("WARN")
 
-    # Read the raw stream from Kafka. Kafka delivers key/value as raw bytes.
+    # Read the raw stream from Kafka (key/value arrive as raw bytes).
     raw = (
         spark.readStream
         .format("kafka")
@@ -56,25 +68,23 @@ def main():
         .load()
     )
 
-    # =================================================================
-    # TODO 2 (YOUR CODE): turn the raw Kafka "value" (bytes) into columns.
-    # Three moves:
-    #   a) cast the `value` column to a string
-    #   b) parse that JSON string with STOCK_SCHEMA (hint: from_json)
-    #   c) flatten it so each field is its own top-level column
-    # Replace this placeholder with your transformation.
-    # =================================================================
+    # Turn the Kafka value (bytes) into real columns, then add a date column
+    # so files are grouped into per-day folders.
     parsed = (
-        raw.selectExpr("CAST(value AS STRING) AS json")               # a) bytes -> string
-        .select(from_json(col("json"), STOCK_SCHEMA).alias("data"))   # b) decode with schema
-        .select("data.*")                                             # c) spread into columns
+        raw.selectExpr("CAST(value AS STRING) AS json")
+        .select(from_json(col("json"), STOCK_SCHEMA).alias("data"))
+        .select("data.*")
+        .withColumn("date", col("timestamp").substr(1, 10))  # 2026-07-30
     )
 
-    # Print each micro-batch to the console so we can watch it work.
+    # Write the raw rows to the bronze bucket as Parquet, one folder per date.
     query = (
         parsed.writeStream
-        .format("console")
-        .option("truncate", "false")
+        .format("parquet")
+        .option("path", BRONZE_PATH)
+        .option("checkpointLocation", CHECKPOINT_PATH)
+        .partitionBy("date")
+        .outputMode("append")
         .start()
     )
     query.awaitTermination()

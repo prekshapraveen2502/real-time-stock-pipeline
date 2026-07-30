@@ -20,6 +20,12 @@ venv/
 data/
 output/
 
+# --- Spark local scratch ---
+spark-checkpoints/
+spark-warehouse/
+metastore_db/
+derby.log
+
 # --- Local-only notes (keep private, off GitHub) ---
 docs/reflections/
 
