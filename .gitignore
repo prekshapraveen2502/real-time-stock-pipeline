@@ -20,6 +20,10 @@ venv/
 data/
 output/
 
+# --- Airflow (local runtime, keep out of git) ---
+airflow-venv/
+airflow_home/
+
 # --- Spark local scratch ---
 spark-checkpoints/
 spark-warehouse/
