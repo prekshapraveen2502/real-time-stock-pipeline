@@ -4,3 +4,4 @@ requests==2.34.2       # HTTP client for the stock API
 kafka-python-ng==2.2.3 # Kafka producer/consumer client (maintained fork, Python 3.12+)
 pyspark==4.2.0         # Spark Structured Streaming (bronze) + batch jobs (silver/gold)
 pyarrow==23.0.1        # read/write Parquet files
+prometheus-client==0.26.0  # expose producer metrics
