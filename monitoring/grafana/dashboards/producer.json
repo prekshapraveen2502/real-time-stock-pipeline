@@ -46,13 +46,13 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(stock_fetch_retries_total)",
+          "expr": "sum(stock_fetch_retries_total) or vector(0)",
           "legendFormat": "retries"
         },
         {
           "refId": "B",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(stock_fetch_failures_total)",
+          "expr": "sum(stock_fetch_failures_total) or vector(0)",
           "legendFormat": "failures"
         }
       ]
