@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # The producer runs on the host and exposes metrics on :8000.
+  # host.docker.internal lets Prometheus (in a container) reach the host.
+  - job_name: stock-producer
+    static_configs:
+      - targets: ["host.docker.internal:8000"]

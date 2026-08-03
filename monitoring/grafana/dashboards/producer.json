@@ -1,0 +1,61 @@
+{
+  "uid": "stock-producer",
+  "title": "Stock Producer",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-15m", "to": "now" },
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Records sent per minute",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (symbol) (rate(stock_records_sent_total[1m]) * 60)",
+          "legendFormat": "{{symbol}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Average fetch latency (seconds)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(stock_fetch_latency_seconds_sum[5m])) / sum(rate(stock_fetch_latency_seconds_count[5m]))",
+          "legendFormat": "avg latency"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total retries / failures",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(stock_fetch_retries_total)",
+          "legendFormat": "retries"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(stock_fetch_failures_total)",
+          "legendFormat": "failures"
+        }
+      ]
+    }
+  ]
+}
