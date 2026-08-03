@@ -1,7 +1,7 @@
-"""Load the Gold summary from MinIO into the Postgres warehouse.
+"""Load the Gold star schema from MinIO into the Postgres warehouse.
 
-Spark reads the Gold Parquet files and writes them into a Postgres table that
-analysts can query with SQL. This is our local stand-in for loading into
+Reads each Gold table (dim_date, dim_ticker, fact_daily_prices) from the gold bucket
+and writes it to a Postgres table of the same name. Postgres is our local stand-in for
 Snowflake; the shape of the job would be the same either way.
 """
 
@@ -16,7 +16,8 @@ MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
 MINIO_USER = os.getenv("MINIO_ROOT_USER", "minioadmin")
 MINIO_PASSWORD = os.getenv("MINIO_ROOT_PASSWORD", "minioadmin123")
 
-GOLD_PATH = "s3a://gold/daily-summary"
+GOLD = "s3a://gold"
+TABLES = ["dim_date", "dim_ticker", "fact_daily_prices"]
 
 PG_HOST = os.getenv("WAREHOUSE_HOST", "localhost")
 PG_PORT = os.getenv("WAREHOUSE_PORT", "5432")
@@ -24,13 +25,12 @@ PG_DB = os.getenv("WAREHOUSE_DB", "stock_warehouse")
 PG_USER = os.getenv("WAREHOUSE_USER", "warehouse")
 PG_PASSWORD = os.getenv("WAREHOUSE_PASSWORD", "warehouse123")
 JDBC_URL = f"jdbc:postgresql://{PG_HOST}:{PG_PORT}/{PG_DB}"
-TABLE = "daily_summary"
 
 
 def build_spark():
     return (
         SparkSession.builder
-        .appName("load-gold-to-warehouse")
+        .appName("load-star-schema-to-warehouse")
         .config("spark.hadoop.fs.s3a.endpoint", MINIO_ENDPOINT)
         .config("spark.hadoop.fs.s3a.access.key", MINIO_USER)
         .config("spark.hadoop.fs.s3a.secret.key", MINIO_PASSWORD)
@@ -40,25 +40,27 @@ def build_spark():
     )
 
 
-def main():
-    spark = build_spark()
-    spark.sparkContext.setLogLevel("WARN")
-
-    gold = spark.read.parquet(GOLD_PATH)
-    print("gold rows to load:", gold.count())
-
+def load_table(spark, name):
+    df = spark.read.parquet(f"{GOLD}/{name}")
     (
-        gold.write
+        df.write
         .format("jdbc")
         .option("url", JDBC_URL)
-        .option("dbtable", TABLE)
+        .option("dbtable", name)
         .option("user", PG_USER)
         .option("password", PG_PASSWORD)
         .option("driver", "org.postgresql.Driver")
-        .mode("overwrite")  # replace the table each run (idempotent for our small data)
+        .mode("overwrite")
         .save()
     )
-    print(f"loaded into postgres table '{TABLE}'")
+    print(f"loaded {name}: {df.count()} rows")
+
+
+def main():
+    spark = build_spark()
+    spark.sparkContext.setLogLevel("WARN")
+    for name in TABLES:
+        load_table(spark, name)
 
 
 if __name__ == "__main__":
