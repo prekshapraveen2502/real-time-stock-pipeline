@@ -3,22 +3,25 @@
 ## Overview
 
 The pipeline ingests live stock market data, processes it through a layered
-(bronze / silver / gold) data lake, and loads analytics ready tables into Snowflake.
+(bronze / silver / gold) data lake, and loads analytics ready tables into a PostgreSQL
+warehouse (a local stand-in for a cloud warehouse such as Snowflake).
 
 ```
-Stock API (Yahoo Finance / Alpha Vantage)
+Stock API (Yahoo Finance via the yfinance library)
   -> Python producer
   -> Kafka (with Zookeeper)
   -> Spark Structured Streaming
   -> Bronze layer (MinIO, raw Parquet)
-  -> Silver layer (cleaned, validated)
-  -> Gold layer (star schema)
-  -> Snowflake
+  -> Silver layer (cleaned, deduplicated)
+  -> Gold layer (star schema: fact + dimensions, SCD Type 2)
+  -> PostgreSQL warehouse
   -> Analytics SQL
 ```
 
-Airflow orchestrates the batch jobs, including retries, backfills, and task dependencies.
-All services run locally with Docker Compose, and PostgreSQL backs the Airflow metadata.
+Airflow orchestrates the batch refinement (silver -> gold -> warehouse) with retries and task
+dependencies. Ingestion (producer -> Kafka -> bronze streaming) runs as its own long-running
+processes, not inside the DAG. Infrastructure runs locally with Docker Compose; Airflow itself
+runs in standalone mode with a local metadata database.
 
 ## Components
 
@@ -26,9 +29,10 @@ All services run locally with Docker Compose, and PostgreSQL backs the Airflow m
 * Kafka and Zookeeper: a durable, ordered, replayable event log.
 * Spark Structured Streaming: consumes Kafka and writes raw events to the bronze layer.
 * MinIO: S3 compatible object storage for the data lake.
-* Spark batch jobs: clean bronze into silver and model silver into a gold star schema.
+* Spark batch jobs: clean bronze into silver and model silver into a gold star schema
+  (fact_daily_prices, dim_date, and an SCD Type 2 dim_ticker).
 * Airflow: orchestrates the batch jobs.
-* Snowflake: the analytics warehouse.
+* PostgreSQL: the analytics warehouse (a local stand-in for Snowflake), holding the gold star schema.
 
 ## Data contract: stock event
 
@@ -58,7 +62,7 @@ configurable interval (default 60 seconds).
 | Setting | Value | Reason |
 | ------- | ----- | ------ |
 | topic | stock-prices | single topic for all tickers |
-| partitions | 5 | allows up to 5 parallel consumers; enough for a handful of tickers |
+| partitions | 1 (auto-created) | the local topic is auto-created with a single partition; adding partitions for parallel consumers is a documented scaling step, not yet configured |
 | message key | symbol | routes all events for a ticker to one partition, preserving per-ticker order |
 | replication factor | 1 | single broker locally; would be 3 in production for fault tolerance |
 | retention | 7 days (default) | keeps messages after consumption to allow replay |
@@ -66,6 +70,17 @@ configurable interval (default 60 seconds).
 Kafka guarantees ordering only within a partition. Keying by symbol keeps each ticker's
 events ordered, which is what matters for time-series prices. Ordering across different
 tickers is not required.
+
+## Gold star schema
+
+The gold layer is a star schema loaded into the warehouse:
+
+- `fact_daily_prices`: one row per (ticker, day) with measures (day_high, day_low, avg_close,
+  total_volume) and surrogate foreign keys `date_key` and `ticker_key`.
+- `dim_date`: one row per date with calendar attributes (year, month, day, day_of_week, is_weekend).
+- `dim_ticker`: SCD Type 2. Each version of a ticker's attributes is a row with
+  `effective_from`, `effective_to`, and `is_current`, so attribute history is preserved. Facts
+  join on `ticker_key`, which resolves to the version that was current when the fact was recorded.
 
 ## Failure scenarios and defenses
 
