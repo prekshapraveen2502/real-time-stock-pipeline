@@ -28,3 +28,9 @@ FROM fact_daily_prices f
 JOIN dim_ticker t ON f.ticker_key = t.ticker_key
 JOIN dim_date d ON f.date_key = d.date_key
 ORDER BY price_range DESC;
+
+-- Current ticker directory (SCD Type 2: only the live version of each ticker).
+SELECT symbol, company_name, currency, effective_from
+FROM dim_ticker
+WHERE is_current
+ORDER BY symbol;
