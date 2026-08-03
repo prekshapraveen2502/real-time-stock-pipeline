@@ -1,6 +1,8 @@
 # Phase 0-2 dependencies. Versions pinned for reproducibility.
 python-dotenv==1.0.1   # loads .env into the process environment
 requests==2.34.2       # HTTP client for the stock API
+yfinance==1.5.2        # fetch stock prices from Yahoo Finance
+pandas==2.3.3          # dataframes (used by yfinance and the producer)
 kafka-python-ng==2.2.3 # Kafka producer/consumer client (maintained fork, Python 3.12+)
 pyspark==4.2.0         # Spark Structured Streaming (bronze) + batch jobs (silver/gold)
 pyarrow==23.0.1        # read/write Parquet files
