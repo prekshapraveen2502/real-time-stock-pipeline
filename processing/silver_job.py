@@ -33,6 +33,11 @@ def build_spark():
     )
 
 
+def clean(bronze):
+    """Keep one row per (symbol, timestamp) natural key and drop non-positive prices."""
+    return bronze.dropDuplicates(["symbol", "timestamp"]).filter("close > 0")
+
+
 def main():
     spark = build_spark()
     spark.sparkContext.setLogLevel("WARN")
@@ -40,16 +45,11 @@ def main():
     bronze = spark.read.parquet(BRONZE_PATH)
     print("bronze rows:", bronze.count())
 
-    # Clean the raw data: keep one row per (symbol, timestamp) and drop bad prices.
-    clean = (
-        bronze
-        .dropDuplicates(["symbol", "timestamp"])
-        .filter("close > 0")
-    )
+    cleaned = clean(bronze)
 
-    print("silver rows:", clean.count())
+    print("silver rows:", cleaned.count())
     (
-        clean.write
+        cleaned.write
         .format("parquet")
         .mode("overwrite")
         .partitionBy("date")

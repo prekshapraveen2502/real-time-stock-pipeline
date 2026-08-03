@@ -81,6 +81,15 @@ Handy URLs once the stack is up:
 
 Stop the stack with `docker compose down`.
 
+## Tests
+
+```bash
+pytest
+```
+
+Unit tests cover the transform logic (deduplication, aggregation, the date dimension) and the
+producer's record shaping, run on small in-memory data with external systems mocked.
+
 ## Screenshots
 
 **Kafka UI, live messages in the `stock-prices` topic**
