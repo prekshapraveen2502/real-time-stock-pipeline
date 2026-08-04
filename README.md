@@ -1,5 +1,7 @@
 # Real-Time Stock Data Engineering Pipeline
 
+![CI](https://github.com/prekshapraveen2502/real-time-stock-pipeline/actions/workflows/ci.yml/badge.svg)
+
 An end to end streaming pipeline that ingests live stock market data, processes it in real
 time through a bronze/silver/gold data lake, and loads it into a warehouse for analytics.
 
@@ -107,6 +109,10 @@ producer's record shaping, run on small in-memory data with external systems moc
 **Postgres, the Gold daily summary table**
 
 ![Postgres table](docs/screenshots/postgres-table.png)
+
+**Grafana, live producer metrics (throughput, fetch latency, retries and failures)**
+
+![Grafana dashboard](docs/screenshots/grafana-dashboard.png)
 
 ## Repository layout
 
