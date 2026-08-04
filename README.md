@@ -106,7 +106,7 @@ producer's record shaping, run on small in-memory data with external systems moc
 
 ![MinIO bucket](docs/screenshots/minio-bucket.png)
 
-**Postgres, the Gold daily summary table**
+**Postgres, the Gold star schema (fact table + SCD Type 2 dimensions)**
 
 ![Postgres table](docs/screenshots/postgres-table.png)
 
