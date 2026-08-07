@@ -83,6 +83,13 @@ Handy URLs once the stack is up:
 
 Stop the stack with `docker compose down`.
 
+### Orchestration (Airflow)
+
+The DAG in `dags/stock_pipeline_dag.py` runs the batch refinement (silver -> gold -> warehouse).
+It derives the project path from its own location, so no path editing is needed. On Apple
+Silicon, if Airflow runs under an Intel Python, set `SPARK_ARCH_PREFIX="arch -arm64"` before
+starting Airflow so the Spark jobs run in native mode.
+
 ## Tests
 
 ```bash

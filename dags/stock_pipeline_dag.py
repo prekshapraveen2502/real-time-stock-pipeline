@@ -5,23 +5,36 @@ warehouse. Ingestion (producer -> Kafka -> bronze) runs continuously as its own
 services; this DAG schedules the refinement on top of the bronze data.
 """
 
+import os
 from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 
-PROJECT_DIR = "/Users/prekshapraveen/Desktop/Real-Time Stock Data Engineering Project"
-VENV_BIN = f"{PROJECT_DIR}/venv/bin"
+# Project root is derived from this file's location (this DAG lives in <project>/dags), so
+# there is no hardcoded machine path; the pipeline runs wherever the repo is checked out.
+# PROJECT_DIR can still be overridden with an env var if needed.
+PROJECT_DIR = os.getenv(
+    "PROJECT_DIR",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+)
+VENV_BIN = os.path.join(PROJECT_DIR, "venv", "bin")
+
+# Optional architecture prefix for mixed-arch hosts (e.g. set SPARK_ARCH_PREFIX="arch -arm64"
+# on Apple Silicon when Airflow runs under an Intel Python). Empty by default, so it is a
+# no-op on a normal single-architecture machine.
+ARCH_PREFIX = os.getenv("SPARK_ARCH_PREFIX", "")
+
 S3_PKG = "org.apache.hadoop:hadoop-aws:3.5.0"
 PG_PKG = "org.postgresql:postgresql:42.7.4"
 
 
 def spark_cmd(script, packages):
     # Put the project venv first on PATH so spark-submit uses the Python that has PySpark.
-    # arch -arm64 forces native mode (Airflow runs on an Intel Python; our packages are arm64).
+    prefix = f"{ARCH_PREFIX} " if ARCH_PREFIX else ""
     return (
         f'cd "{PROJECT_DIR}" && export PATH="{VENV_BIN}:$PATH" && '
-        f'arch -arm64 spark-submit --packages {packages} {script}'
+        f'{prefix}spark-submit --packages {packages} {script}'
     )
 
 
