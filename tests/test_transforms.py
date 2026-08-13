@@ -4,19 +4,23 @@ from processing.silver_job import clean
 from processing.gold_job import build_dim_date, build_fact
 
 
-def test_silver_clean_dedupes_and_drops_bad_prices(spark):
+def test_silver_clean_keeps_latest_and_drops_bad_prices(spark):
     df = spark.createDataFrame(
         [
-            ("AAPL", "t1", 100.0),
-            ("AAPL", "t1", 100.0),  # duplicate natural key -> should collapse to one
-            ("MSFT", "t1", 200.0),
-            ("AMZN", "t2", -5.0),   # non-positive price -> should be dropped
+            # same natural key (AAPL, t1): keep the later-arriving version (205.0)
+            ("AAPL", "t1", 200.0, "2026-08-13 10:01:00", 1),
+            ("AAPL", "t1", 205.0, "2026-08-13 10:03:00", 2),
+            ("MSFT", "t1", 300.0, "2026-08-13 10:00:00", 3),
+            ("AMZN", "t2", -5.0, "2026-08-13 10:00:00", 4),  # non-positive -> dropped
         ],
-        "symbol string, timestamp string, close double",
+        "symbol string, timestamp string, close double, bronze_ingested_at string, kafka_offset long",
     )
     result = clean(df)
+    kept = {r.symbol: r.close for r in result.collect()}
     assert result.count() == 2
-    assert sorted(r.symbol for r in result.collect()) == ["AAPL", "MSFT"]
+    assert kept["AAPL"] == 205.0   # deterministically kept the latest bronze_ingested_at
+    assert "MSFT" in kept
+    assert "AMZN" not in kept      # close <= 0 dropped
 
 
 def test_gold_fact_aggregates_measures(spark):
