@@ -165,7 +165,8 @@ def build_dim_ticker(spark, silver):
 
 
 def build_fact(silver, dim_ticker):
-    current = dim_ticker.filter(F.col("is_current")).select("ticker_key", "symbol")
+    # Aggregate to one row per (symbol, day). Turn the date string into a real Spark date so we
+    # can range-compare it against the dimension's validity window.
     daily = (
         silver.groupBy("symbol", "date")
         .agg(
@@ -174,12 +175,28 @@ def build_fact(silver, dim_ticker):
             F.avg("close").alias("avg_close"),
             F.sum("volume").alias("total_volume"),
         )
+        .withColumn("fact_date", F.to_date("date"))
+        .alias("f")
+    )
+    # Keep ALL ticker versions (not just the current one), so each fact joins to the version
+    # that was valid on its own date.
+    versions = dim_ticker.select("ticker_key", "symbol", "effective_from", "effective_to").alias("d")
+    # SCD2 validity, end-exclusive: same symbol and effective_from <= fact_date < effective_to.
+    match = (
+        (F.col("f.symbol") == F.col("d.symbol"))
+        & (F.col("f.fact_date") >= F.col("d.effective_from"))
+        & (F.col("f.fact_date") < F.col("d.effective_to"))
     )
     return (
-        daily
-        .join(current, on="symbol", how="left")
-        .withColumn("date_key", F.regexp_replace("date", "-", "").cast("int"))
-        .select("date_key", "ticker_key", "day_high", "day_low", "avg_close", "total_volume")
+        daily.join(versions, match, how="left")
+        .select(
+            F.regexp_replace(F.col("f.date"), "-", "").cast("int").alias("date_key"),
+            F.col("d.ticker_key"),
+            F.col("f.day_high"),
+            F.col("f.day_low"),
+            F.col("f.avg_close"),
+            F.col("f.total_volume"),
+        )
     )
 
 

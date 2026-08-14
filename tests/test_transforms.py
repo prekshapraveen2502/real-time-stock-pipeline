@@ -1,5 +1,7 @@
 """Unit tests for the Spark transform logic, run on tiny in-memory DataFrames."""
 
+from datetime import date
+
 from processing.silver_job import clean
 from processing.gold_job import build_dim_date, build_fact
 
@@ -32,8 +34,9 @@ def test_gold_fact_aggregates_measures(spark):
         "symbol string, date string, high double, low double, close double, volume long",
     )
     dim_ticker = spark.createDataFrame(
-        [(1, "AAPL", True)],
-        "ticker_key int, symbol string, is_current boolean",
+        [(1, "AAPL", "Apple Inc.", "USD", "yfinance", date(2026, 1, 1), date(9999, 12, 31), True)],
+        "ticker_key int, symbol string, company_name string, currency string, source string,"
+        " effective_from date, effective_to date, is_current boolean",
     )
     row = build_fact(silver, dim_ticker).collect()[0]
     assert row.date_key == 20260730
@@ -42,6 +45,29 @@ def test_gold_fact_aggregates_measures(spark):
     assert row.day_low == 7.0
     assert row.avg_close == 10.0        # avg(9, 11)
     assert row.total_volume == 150      # 100 + 50
+
+
+def test_gold_fact_matches_historical_ticker_version(spark):
+    silver = spark.createDataFrame(
+        [
+            ("AAPL", "2026-03-15", 10.0, 8.0, 9.0, 100),   # historical -> old version
+            ("AAPL", "2026-09-15", 12.0, 7.0, 11.0, 50),   # later -> new version
+            ("AAPL", "2026-08-01", 5.0, 4.0, 4.5, 10),     # boundary: effective_to is exclusive
+        ],
+        "symbol string, date string, high double, low double, close double, volume long",
+    )
+    dim_ticker = spark.createDataFrame(
+        [
+            (1, "AAPL", "Apple Inc.", "USD", "yfinance", date(2026, 1, 1), date(2026, 8, 1), False),
+            (7, "AAPL", "Apple Inc.", "USD", "provider_B", date(2026, 8, 1), date(9999, 12, 31), True),
+        ],
+        "ticker_key int, symbol string, company_name string, currency string, source string,"
+        " effective_from date, effective_to date, is_current boolean",
+    )
+    got = {r.date_key: r.ticker_key for r in build_fact(silver, dim_ticker).collect()}
+    assert got[20260315] == 1   # historical fact -> old version
+    assert got[20260915] == 7   # later fact -> new (current) version
+    assert got[20260801] == 7   # boundary: effective_from inclusive, effective_to exclusive
 
 
 def test_dim_date_attributes(spark):
