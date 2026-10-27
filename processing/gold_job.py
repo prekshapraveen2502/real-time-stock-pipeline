@@ -160,22 +160,35 @@ def _merge_dim_ticker(spark, existing, incoming, batch_date):
     history = existing.filter(~F.col("is_current"))
     max_key = existing.agg(F.max("ticker_key")).first()[0] or 0
 
-    # Compare incoming attributes to the current version of each symbol.
-    cur = current.select("symbol", *[F.col(a).alias(f"cur_{a}") for a in ATTRS])
+    # Compare incoming attributes to the current version of each symbol. cur_symbol survives the
+    # left join, so a null cur_symbol means "no current version" (a brand-new symbol). Attribute
+    # values are never used for that test, because an attribute can legitimately be null.
+    cur = current.select(
+        "symbol",
+        F.col("symbol").alias("cur_symbol"),
+        *[F.col(a).alias(f"cur_{a}") for a in ATTRS],
+    )
     cmp = incoming.join(cur, on="symbol", how="left")
-    changed = None
+    is_new = F.col("cur_symbol").isNull()
+    is_changed = None
     for a in ATTRS:
-        cond = F.col(f"cur_{a}").isNull() | (F.col(a) != F.col(f"cur_{a}"))  # null => new symbol
-        changed = cond if changed is None else (changed | cond)
-    affected = cmp.filter(changed)  # attribute changes + brand-new symbols
+        # eqNullSafe treats null as a value: null vs null is "same", "x" vs null is "different".
+        differs = ~F.col(a).eqNullSafe(F.col(f"cur_{a}"))
+        is_changed = differs if is_changed is None else (is_changed | differs)
+    affected = cmp.filter(is_new | is_changed).withColumn("_is_new", is_new)
     affected_symbols = [r["symbol"] for r in affected.select("symbol").distinct().collect()]
 
-    # New current version for every changed/new symbol, effective from batch_date.
+    # New current version for every changed/new symbol. A brand-new symbol has no earlier
+    # version, so it starts at LOW_DATE; a changed symbol starts at batch_date, where the old
+    # version is closed.
     w = Window.orderBy("symbol")
     new_versions = (
-        affected.select("symbol", *ATTRS)
+        affected.select("symbol", *ATTRS, "_is_new")
         .withColumn("ticker_key", F.row_number().over(w) + F.lit(int(max_key)))
-        .withColumn("effective_from", batch)
+        .withColumn(
+            "effective_from",
+            F.when(F.col("_is_new"), F.to_date(F.lit(LOW_DATE))).otherwise(batch),
+        )
         .withColumn("effective_to", F.to_date(F.lit(HIGH_DATE)))
         .withColumn("is_current", F.lit(True))
         .select(*DIM_TICKER_COLS)

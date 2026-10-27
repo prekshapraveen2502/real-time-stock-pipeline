@@ -116,6 +116,55 @@ def test_gold_dim_ticker_scd2_boundaries_use_batch_date(spark):
     assert current.ticker_key != expired.ticker_key     # fresh surrogate key
 
 
+TICKER_ATTRS_SCHEMA = "symbol string, company_name string, currency string, source string"
+DIM_TICKER_DDL = (
+    "ticker_key int, symbol string, company_name string, currency string, source string,"
+    " effective_from date, effective_to date, is_current boolean"
+)
+
+
+def test_gold_dim_ticker_unmapped_symbol_is_stable_across_runs(spark):
+    # TSLA is not in COMPANY_NAMES, so company_name is null. Identical reruns must not
+    # create a new version each time.
+    incoming = spark.createDataFrame([("TSLA", None, "USD", "yfinance")], TICKER_ATTRS_SCHEMA)
+    dim = _merge_dim_ticker(spark, None, incoming, "2026-08-13")
+    for day in ["2026-08-14", "2026-08-15"]:
+        dim = _merge_dim_ticker(spark, spark.createDataFrame(dim.collect(), DIM_TICKER_DDL), incoming, day)
+    rows = dim.collect()
+    assert len(rows) == 1
+    assert rows[0].is_current is True
+
+
+def test_gold_dim_ticker_new_symbol_later_starts_at_low_date(spark):
+    existing = spark.createDataFrame(
+        [(1, "AAPL", "Apple Inc.", "USD", "yfinance", date(1900, 1, 1), date(9999, 12, 31), True)],
+        DIM_TICKER_DDL,
+    )
+    incoming = spark.createDataFrame(
+        [("AAPL", "Apple Inc.", "USD", "yfinance"), ("MSFT", "Microsoft Corporation", "USD", "yfinance")],
+        TICKER_ATTRS_SCHEMA,
+    )
+    merged = {r.symbol: r for r in _merge_dim_ticker(spark, existing, incoming, "2026-08-13").collect()}
+    assert len(merged) == 2                                  # AAPL untouched, MSFT added
+    assert merged["AAPL"].ticker_key == 1
+    assert str(merged["MSFT"].effective_from) == "1900-01-01"
+    assert merged["MSFT"].ticker_key == 2                    # next surrogate key
+
+
+def test_gold_dim_ticker_null_to_value_is_a_change(spark):
+    existing = spark.createDataFrame(
+        [(1, "TSLA", None, "USD", "yfinance", date(1900, 1, 1), date(9999, 12, 31), True)],
+        DIM_TICKER_DDL,
+    )
+    incoming = spark.createDataFrame([("TSLA", "Tesla Inc.", "USD", "yfinance")], TICKER_ATTRS_SCHEMA)
+    merged = _merge_dim_ticker(spark, existing, incoming, "2026-08-13").collect()
+    expired = [r for r in merged if not r.is_current][0]
+    current = [r for r in merged if r.is_current][0]
+    assert str(expired.effective_to) == "2026-08-13"
+    assert current.company_name == "Tesla Inc."
+    assert str(current.effective_from) == "2026-08-13"      # a change starts at the batch date
+
+
 def test_dim_date_attributes(spark):
     silver = spark.createDataFrame([("2026-07-30",)], "date string")
     row = build_dim_date(silver).collect()[0]
