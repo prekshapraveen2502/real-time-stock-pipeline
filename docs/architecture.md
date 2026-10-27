@@ -18,10 +18,11 @@ Stock API (Yahoo Finance via the yfinance library)
   -> Analytics SQL
 ```
 
-Airflow orchestrates the batch refinement (silver -> gold -> warehouse) with retries and task
-dependencies. Ingestion (producer -> Kafka -> bronze streaming) runs as its own long-running
-processes, not inside the DAG. Infrastructure runs locally with Docker Compose; Airflow itself
-runs in standalone mode with a local metadata database.
+Airflow orchestrates the batch refinement (silver -> gold -> warehouse) with retries, task
+dependencies and a failure alert. Ingestion (producer -> Kafka -> bronze streaming) runs as its own
+long-running containers, not inside the DAG. Every component runs in Docker Compose: the producer
+image, a Spark image for the streaming and batch jobs, and an Airflow image built on the Spark
+image (webserver and scheduler with the LocalExecutor, metadata in a separate Postgres database).
 
 ## Components
 

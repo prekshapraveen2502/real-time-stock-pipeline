@@ -1,7 +1,9 @@
-# Spark image: runs the bronze streaming job and the silver, gold and warehouse batch jobs.
-# Build from the repo root:
-#   docker build -f processing/Dockerfile -t stock-spark .
-FROM python:3.12-slim-bookworm
+# Two images from one file, built from the repo root:
+#   spark    runs the bronze streaming job and the silver, gold and warehouse batch jobs
+#            docker build -f processing/Dockerfile --target spark -t stock-spark .
+#   airflow  the spark image plus Airflow, so DAG tasks run Spark with the same Java and jars
+#            docker build -f processing/Dockerfile --target airflow -t stock-airflow .
+FROM python:3.12-slim-bookworm AS spark
 
 ENV PYTHONUNBUFFERED=1
 
@@ -42,3 +44,20 @@ RUN useradd --create-home spark && mkdir -p /app/spark-checkpoints && chown spar
 USER spark
 
 CMD ["python", "processing/streaming_job.py"]
+
+
+FROM spark AS airflow
+
+USER root
+# Airflow's constraints file pins every dependency to a tested version. It only applies to what this
+# command installs, so the pyspark 4.2.0 already in the image is left alone.
+ARG AIRFLOW_VERSION=2.10.4
+RUN pip install --no-cache-dir "apache-airflow[postgres]==${AIRFLOW_VERSION}" \
+      --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.12.txt"
+
+ENV AIRFLOW_HOME=/opt/airflow
+COPY dags/ dags/
+COPY scripts/airflow-init.sh scripts/airflow-init.sh
+# logs/ must exist (owned by spark) in the image so a new named volume mounted there inherits it.
+RUN mkdir -p /opt/airflow/logs && chown -R spark /opt/airflow
+USER spark

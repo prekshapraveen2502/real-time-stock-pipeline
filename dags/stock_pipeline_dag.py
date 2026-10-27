@@ -14,31 +14,18 @@ from airflow.operators.bash import BashOperator
 from alerts import notify_failure  # Airflow puts the dags folder on the path
 
 # Project root is derived from this file's location (this DAG lives in <project>/dags), so
-# there is no hardcoded machine path; the pipeline runs wherever the repo is checked out.
-# PROJECT_DIR can still be overridden with an env var if needed.
+# there is no hardcoded machine path. In the Airflow container that is /app.
 PROJECT_DIR = os.getenv(
     "PROJECT_DIR",
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 )
-VENV_BIN = os.path.join(PROJECT_DIR, "venv", "bin")
-
-# Optional architecture prefix for mixed-arch hosts (e.g. set SPARK_ARCH_PREFIX="arch -arm64"
-# on Apple Silicon when Airflow runs under an Intel Python). Empty by default, so it is a
-# no-op on a normal single-architecture machine.
-ARCH_PREFIX = os.getenv("SPARK_ARCH_PREFIX", "")
-
-S3_PKG = "org.apache.hadoop:hadoop-aws:3.5.0"
-PG_PKG = "org.postgresql:postgresql:42.7.4"
 
 
-def spark_cmd(script, packages, extra_args=""):
-    # Put the project venv first on PATH so spark-submit uses the Python that has PySpark.
-    prefix = f"{ARCH_PREFIX} " if ARCH_PREFIX else ""
+def spark_cmd(script, extra_args=""):
+    # The Airflow image is built on the Spark image, so PySpark, Java and the Kafka, S3 and
+    # Postgres jars are already installed; a job is just a Python script.
     tail = f" {extra_args}" if extra_args else ""
-    return (
-        f'cd "{PROJECT_DIR}" && export PATH="{VENV_BIN}:$PATH" && '
-        f'{prefix}spark-submit --packages {packages} {script}{tail}'
-    )
+    return f'cd "{PROJECT_DIR}" && python {script}{tail}'
 
 
 default_args = {
@@ -61,19 +48,19 @@ with DAG(
 
     silver = BashOperator(
         task_id="silver_clean",
-        bash_command=spark_cmd("processing/silver_job.py", S3_PKG),
+        bash_command=spark_cmd("processing/silver_job.py"),
     )
 
     gold = BashOperator(
         task_id="gold_summary",
         # {{ ds }} is Airflow's logical batch date; passing it keeps SCD2 boundaries tied to the
         # logical run, not the physical execution day (so a retry the next day is unaffected).
-        bash_command=spark_cmd("processing/gold_job.py", S3_PKG, "--batch-date {{ ds }}"),
+        bash_command=spark_cmd("processing/gold_job.py", "--batch-date {{ ds }}"),
     )
 
     load = BashOperator(
         task_id="load_warehouse",
-        bash_command=spark_cmd("warehouse/load_to_warehouse.py", f"{S3_PKG},{PG_PKG}"),
+        bash_command=spark_cmd("warehouse/load_to_warehouse.py"),
     )
 
     silver >> gold >> load

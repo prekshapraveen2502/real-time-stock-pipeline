@@ -5,17 +5,43 @@
 
 # Shared settings for every container that runs Spark (processing/Dockerfile). Inside the Docker
 # network services are reached by name, so these override the localhost values in .env.
+x-spark-env: &spark-env
+  KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  MINIO_ENDPOINT: http://minio:9000
+  WAREHOUSE_HOST: postgres
+  WAREHOUSE_PORT: "5432"
+
 x-spark: &spark
   build:
     context: .
     dockerfile: processing/Dockerfile
+    target: spark
   image: stock-spark
   env_file: .env
+  environment: *spark-env
+
+# Shared settings for the Airflow containers (the spark image plus Airflow). Airflow keeps its own
+# metadata in a separate "airflow" database on the same Postgres server, and runs tasks with the
+# LocalExecutor, so the scheduler executes them in its own container.
+x-airflow: &airflow
+  build:
+    context: .
+    dockerfile: processing/Dockerfile
+    target: airflow
+  image: stock-airflow
+  env_file: .env
   environment:
-    KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-    MINIO_ENDPOINT: http://minio:9000
-    WAREHOUSE_HOST: postgres
-    WAREHOUSE_PORT: "5432"
+    <<: *spark-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${WAREHOUSE_USER}:${WAREHOUSE_PASSWORD}@postgres:5432/airflow
+    AIRFLOW__CORE__DAGS_FOLDER: /app/dags
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+  volumes:
+    - ./dags:/app/dags            # DAG edits apply without rebuilding the image
+    - airflow_logs:/opt/airflow/logs   # shared so the webserver can show the scheduler's task logs
 
 services:
   # Object storage (S3 compatible). Holds bronze/silver/gold layers later.
@@ -128,6 +154,44 @@ services:
       POSTGRES_DB: ${WAREHOUSE_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${WAREHOUSE_USER} -d ${WAREHOUSE_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-time Airflow setup: create the airflow database, migrate it, create the admin login.
+  airflow-init:
+    <<: *airflow
+    container_name: stock-airflow-init
+    command: ["bash", "scripts/airflow-init.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Airflow UI at http://localhost:8081 (Kafka UI already uses 8080).
+  airflow-webserver:
+    <<: *airflow
+    container_name: stock-airflow-webserver
+    command: ["airflow", "webserver"]
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Schedules the DAG and, with the LocalExecutor, runs its Spark tasks.
+  airflow-scheduler:
+    <<: *airflow
+    container_name: stock-airflow-scheduler
+    command: ["airflow", "scheduler"]
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
 
   # Metrics store: scrapes the producer's /metrics endpoint on the host.
   prometheus:
@@ -164,3 +228,4 @@ volumes:
   zookeeper_log:
   postgres_data:
   grafana_data:
+  airflow_logs:
