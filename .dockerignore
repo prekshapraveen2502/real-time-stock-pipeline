@@ -1,0 +1,16 @@
+# Keep local environments, runtime state and secrets out of every image build context.
+.git/
+venv/
+.venv/
+airflow-venv/
+airflow_home/
+spark-checkpoints/
+spark-warehouse/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+.claude/
+docs/
