@@ -3,7 +3,7 @@
 from datetime import date
 
 from processing.silver_job import clean
-from processing.gold_job import build_dim_date, build_fact, _merge_dim_ticker
+from processing.gold_job import build_dim_date, build_fact, _incoming_ticker_attrs, _merge_dim_ticker
 
 
 def test_silver_clean_keeps_latest_and_drops_bad_prices(spark):
@@ -70,15 +70,28 @@ def test_gold_fact_matches_historical_ticker_version(spark):
     assert got[20260801] == 7   # boundary: effective_from inclusive, effective_to exclusive
 
 
-def test_gold_dim_ticker_first_load_uses_batch_date(spark):
+def test_gold_dim_ticker_first_load_starts_at_low_date(spark):
     incoming = spark.createDataFrame(
         [("AAPL", "Apple Inc.", "USD", "yfinance")],
         "symbol string, company_name string, currency string, source string",
     )
     row = _merge_dim_ticker(spark, None, incoming, "2026-08-13").collect()[0]
-    assert str(row.effective_from) == "2026-08-13"   # from the logical batch date, not today
+    assert str(row.effective_from) == "1900-01-01"   # first version is open-ended in the past
     assert str(row.effective_to) == "9999-12-31"
     assert row.is_current is True
+
+
+def test_gold_first_version_covers_earlier_facts(spark):
+    # The fact is dated before the first load's batch date, like the real 2026-07-30 data.
+    silver = spark.createDataFrame(
+        [("AAPL", "2026-07-30", 334.0, 333.04, 333.85, 882500, "USD", "yfinance")],
+        "symbol string, date string, high double, low double, close double, volume long,"
+        " currency string, source string",
+    )
+    dim = _merge_dim_ticker(spark, None, _incoming_ticker_attrs(silver), "2026-08-13")
+    row = build_fact(silver, dim).collect()[0]
+    assert row.date_key == 20260730
+    assert row.ticker_key == 1   # matched the first version instead of NULL
 
 
 def test_gold_dim_ticker_scd2_boundaries_use_batch_date(spark):

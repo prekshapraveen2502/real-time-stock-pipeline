@@ -35,6 +35,7 @@ SILVER_PATH = "s3a://silver/stock-prices"
 GOLD = "s3a://gold"
 
 HIGH_DATE = "9999-12-31"                       # "open" end date for the current version
+LOW_DATE = "1900-01-01"                        # "open" start date for a symbol's first version
 ATTRS = ["company_name", "currency", "source"]  # tracked attributes of a ticker
 DIM_TICKER_COLS = ["ticker_key", "symbol", "company_name", "currency", "source",
                    "effective_from", "effective_to", "is_current"]
@@ -143,12 +144,13 @@ def _merge_dim_ticker(spark, existing, incoming, batch_date):
     batch = F.to_date(F.lit(batch_date))
 
     if existing is None:
-        # First load: every ticker is a brand-new current version, effective from batch_date.
+        # First load: every ticker is a brand-new current version. Nothing earlier contradicts
+        # it, so it starts at LOW_DATE and also covers facts dated before this batch.
         w = Window.orderBy("symbol")
         return (
             incoming
             .withColumn("ticker_key", F.row_number().over(w))
-            .withColumn("effective_from", batch)
+            .withColumn("effective_from", F.to_date(F.lit(LOW_DATE)))
             .withColumn("effective_to", F.to_date(F.lit(HIGH_DATE)))
             .withColumn("is_current", F.lit(True))
             .select(*DIM_TICKER_COLS)
