@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 
+from alerts import notify_failure  # Airflow puts the dags folder on the path
+
 # Project root is derived from this file's location (this DAG lives in <project>/dags), so
 # there is no hardcoded machine path; the pipeline runs wherever the repo is checked out.
 # PROJECT_DIR can still be overridden with an env var if needed.
@@ -42,6 +44,9 @@ def spark_cmd(script, packages, extra_args=""):
 default_args = {
     "retries": 3,                          # retry transient failures (e.g. storage commit hiccups)
     "retry_delay": timedelta(seconds=30),
+    # Retries only help transient failures. A failure that repeats on every attempt (like a broken
+    # environment) needs a person, so alert once the last retry has failed.
+    "on_failure_callback": notify_failure,
 }
 
 with DAG(
