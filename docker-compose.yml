@@ -1,6 +1,21 @@
 # Local development stack. Grown one service per phase.
 # Bring up:   docker compose up -d
 # Tear down:  docker compose down        (add -v to also wipe volumes/data)
+# Batch jobs: docker compose run --rm spark-batch python processing/silver_job.py
+
+# Shared settings for every container that runs Spark (processing/Dockerfile). Inside the Docker
+# network services are reached by name, so these override the localhost values in .env.
+x-spark: &spark
+  build:
+    context: .
+    dockerfile: processing/Dockerfile
+  image: stock-spark
+  env_file: .env
+  environment:
+    KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    MINIO_ENDPOINT: http://minio:9000
+    WAREHOUSE_HOST: postgres
+    WAREHOUSE_PORT: "5432"
 
 services:
   # Object storage (S3 compatible). Holds bronze/silver/gold layers later.
@@ -79,6 +94,27 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
     ports:
       - "8000:8000"   # Prometheus /metrics
+
+  # Spark Structured Streaming: Kafka -> bronze + quarantine, running continuously.
+  streaming:
+    <<: *spark
+    container_name: stock-streaming
+    command: ["python", "processing/streaming_job.py"]
+    depends_on:
+      - kafka
+      - minio
+    restart: unless-stopped
+    volumes:
+      # Checkpoints live on the host so a restarted container resumes from its committed offsets.
+      - ./spark-checkpoints:/app/spark-checkpoints
+
+  # One-off Spark batch jobs (silver, gold, warehouse load). Not started by `up`; run on demand.
+  spark-batch:
+    <<: *spark
+    profiles: ["batch"]
+    depends_on:
+      - minio
+      - postgres
 
   # SQL warehouse: holds the Gold summary for analysts to query.
   postgres:
