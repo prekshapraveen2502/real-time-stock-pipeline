@@ -4,14 +4,18 @@ Produces three tables in the gold bucket:
   - dim_date           one row per calendar date, with date attributes
   - dim_ticker         SCD Type 2: one row per version of a ticker's attributes, with
                        effective_from / effective_to / is_current so history is preserved
-  - fact_daily_prices  one row per (ticker, date) with the measures, referencing the
-                       CURRENT ticker version and the date dimension
+  - fact_daily_prices  one row per (ticker, date) with the measures, referencing the ticker
+                       version that was valid on the fact date (historical SCD2 join) and date
 
 The fact holds only measures plus surrogate keys (date_key, ticker_key). This is the
-standard star schema used in analytics warehouses.
+standard star schema used in analytics warehouses. SCD2 version boundaries use a logical
+batch date passed in with --batch-date (Airflow's {{ ds }}), not the machine's current date,
+so a retry on a later physical day still produces the same boundaries.
 """
 
+import argparse
 import os
+from datetime import datetime
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
@@ -53,6 +57,26 @@ COMPANY_NAMES = {
 }
 
 
+def _valid_date(value):
+    """argparse type: accept only YYYY-MM-DD, fail clearly otherwise."""
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid --batch-date '{value}', expected YYYY-MM-DD")
+    return value
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Build the Gold star schema from Silver.")
+    parser.add_argument(
+        "--batch-date",
+        required=True,
+        type=_valid_date,
+        help="Logical batch date in YYYY-MM-DD (Airflow's {{ ds }}).",
+    )
+    return parser.parse_args()
+
+
 def build_spark():
     return (
         SparkSession.builder
@@ -92,9 +116,9 @@ def _incoming_ticker_attrs(silver):
     )
 
 
-def build_dim_ticker(spark, silver):
-    """SCD Type 2 merge. New/changed tickers get a new version; changed old versions are
-    closed (is_current=false, effective_to=today). Unchanged and historical rows are kept."""
+def build_dim_ticker(spark, silver, batch_date):
+    """SCD Type 2 dimension. Reads the existing dimension (if any) and merges the incoming
+    ticker attributes, using batch_date for all version boundaries."""
     incoming = _incoming_ticker_attrs(silver)
 
     # Load the existing dimension if present. Re-create it from collected rows so the
@@ -107,13 +131,24 @@ def build_dim_ticker(spark, silver):
     except Exception:
         existing = None
 
+    return _merge_dim_ticker(spark, existing, incoming, batch_date)
+
+
+def _merge_dim_ticker(spark, existing, incoming, batch_date):
+    """Pure SCD Type 2 merge. New/changed tickers get a new version with
+    effective_from=batch_date; changed old versions are closed with effective_to=batch_date.
+    Unchanged and historical rows are kept. batch_date is a YYYY-MM-DD string, converted to a
+    Spark date here so boundaries are proper dates (not strings) and depend only on the logical
+    batch date, never on the machine's current date."""
+    batch = F.to_date(F.lit(batch_date))
+
     if existing is None:
-        # First load: every ticker is a brand-new current version.
+        # First load: every ticker is a brand-new current version, effective from batch_date.
         w = Window.orderBy("symbol")
         return (
             incoming
             .withColumn("ticker_key", F.row_number().over(w))
-            .withColumn("effective_from", F.current_date())
+            .withColumn("effective_from", batch)
             .withColumn("effective_to", F.to_date(F.lit(HIGH_DATE)))
             .withColumn("is_current", F.lit(True))
             .select(*DIM_TICKER_COLS)
@@ -133,21 +168,23 @@ def build_dim_ticker(spark, silver):
     affected = cmp.filter(changed)  # attribute changes + brand-new symbols
     affected_symbols = [r["symbol"] for r in affected.select("symbol").distinct().collect()]
 
-    # New current version for every changed/new symbol, with fresh surrogate keys.
+    # New current version for every changed/new symbol, effective from batch_date.
     w = Window.orderBy("symbol")
     new_versions = (
         affected.select("symbol", *ATTRS)
         .withColumn("ticker_key", F.row_number().over(w) + F.lit(int(max_key)))
-        .withColumn("effective_from", F.current_date())
+        .withColumn("effective_from", batch)
         .withColumn("effective_to", F.to_date(F.lit(HIGH_DATE)))
         .withColumn("is_current", F.lit(True))
         .select(*DIM_TICKER_COLS)
     )
 
     if affected_symbols:
+        # Close the old version on batch_date. The end is exclusive, so a fact dated on
+        # batch_date maps to the NEW version, not this closed one.
         expired = (
             current.filter(F.col("symbol").isin(affected_symbols))
-            .withColumn("effective_to", F.current_date())
+            .withColumn("effective_to", batch)
             .withColumn("is_current", F.lit(False))
             .select(*DIM_TICKER_COLS)
         )
@@ -201,13 +238,14 @@ def build_fact(silver, dim_ticker):
 
 
 def main():
+    args = parse_args()
     spark = build_spark()
     spark.sparkContext.setLogLevel("WARN")
 
     silver = spark.read.parquet(SILVER_PATH)
 
     dim_date = build_dim_date(silver)
-    dim_ticker = build_dim_ticker(spark, silver)
+    dim_ticker = build_dim_ticker(spark, silver, args.batch_date)
     fact = build_fact(silver, dim_ticker)
 
     dim_ticker.orderBy("symbol", "effective_from").show(truncate=False)

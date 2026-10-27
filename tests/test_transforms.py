@@ -3,7 +3,7 @@
 from datetime import date
 
 from processing.silver_job import clean
-from processing.gold_job import build_dim_date, build_fact
+from processing.gold_job import build_dim_date, build_fact, _merge_dim_ticker
 
 
 def test_silver_clean_keeps_latest_and_drops_bad_prices(spark):
@@ -68,6 +68,39 @@ def test_gold_fact_matches_historical_ticker_version(spark):
     assert got[20260315] == 1   # historical fact -> old version
     assert got[20260915] == 7   # later fact -> new (current) version
     assert got[20260801] == 7   # boundary: effective_from inclusive, effective_to exclusive
+
+
+def test_gold_dim_ticker_first_load_uses_batch_date(spark):
+    incoming = spark.createDataFrame(
+        [("AAPL", "Apple Inc.", "USD", "yfinance")],
+        "symbol string, company_name string, currency string, source string",
+    )
+    row = _merge_dim_ticker(spark, None, incoming, "2026-08-13").collect()[0]
+    assert str(row.effective_from) == "2026-08-13"   # from the logical batch date, not today
+    assert str(row.effective_to) == "9999-12-31"
+    assert row.is_current is True
+
+
+def test_gold_dim_ticker_scd2_boundaries_use_batch_date(spark):
+    # An existing current AAPL version sourced from yfinance...
+    existing = spark.createDataFrame(
+        [(1, "AAPL", "Apple Inc.", "USD", "yfinance", date(2026, 1, 1), date(9999, 12, 31), True)],
+        "ticker_key int, symbol string, company_name string, currency string, source string,"
+        " effective_from date, effective_to date, is_current boolean",
+    )
+    # ...whose source now changes, so a new version must be created on the batch date.
+    incoming = spark.createDataFrame(
+        [("AAPL", "Apple Inc.", "USD", "provider_B")],
+        "symbol string, company_name string, currency string, source string",
+    )
+    merged = _merge_dim_ticker(spark, existing, incoming, "2026-08-13").collect()
+    expired = [r for r in merged if not r.is_current][0]
+    current = [r for r in merged if r.is_current][0]
+    assert str(expired.effective_to) == "2026-08-13"    # old version closed on the batch date
+    assert str(current.effective_from) == "2026-08-13"  # new version opens on the batch date
+    assert str(current.effective_to) == "9999-12-31"
+    assert current.source == "provider_B"
+    assert current.ticker_key != expired.ticker_key     # fresh surrogate key
 
 
 def test_dim_date_attributes(spark):

@@ -29,12 +29,13 @@ S3_PKG = "org.apache.hadoop:hadoop-aws:3.5.0"
 PG_PKG = "org.postgresql:postgresql:42.7.4"
 
 
-def spark_cmd(script, packages):
+def spark_cmd(script, packages, extra_args=""):
     # Put the project venv first on PATH so spark-submit uses the Python that has PySpark.
     prefix = f"{ARCH_PREFIX} " if ARCH_PREFIX else ""
+    tail = f" {extra_args}" if extra_args else ""
     return (
         f'cd "{PROJECT_DIR}" && export PATH="{VENV_BIN}:$PATH" && '
-        f'{prefix}spark-submit --packages {packages} {script}'
+        f'{prefix}spark-submit --packages {packages} {script}{tail}'
     )
 
 
@@ -60,7 +61,9 @@ with DAG(
 
     gold = BashOperator(
         task_id="gold_summary",
-        bash_command=spark_cmd("processing/gold_job.py", S3_PKG),
+        # {{ ds }} is Airflow's logical batch date; passing it keeps SCD2 boundaries tied to the
+        # logical run, not the physical execution day (so a retry the next day is unaffected).
+        bash_command=spark_cmd("processing/gold_job.py", S3_PKG, "--batch-date {{ ds }}"),
     )
 
     load = BashOperator(
